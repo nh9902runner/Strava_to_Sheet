@@ -1,0 +1,14 @@
+name: Run archiveAndSendEmails
+
+on:
+  workflow_dispatch:
+
+jobs:
+  post-data:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send POST to Apps Script
+        run: |
+          curl -L -X POST "${{ secrets.GOOGLE_SHEET_WEBAPP_URL }}" \
+            -H "Content-Type: application/json" \
+            -d '{"action": "archive_and_email"}'
