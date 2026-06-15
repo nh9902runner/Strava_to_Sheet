@@ -1,0 +1,12 @@
+{
+  "name": "strava-to-sheets",
+  "version": "1.0.0",
+  "description": "Sync Strava club weekly leaderboard to Google Sheets",
+  "main": "sync.js",
+  "scripts": {
+    "start": "node sync.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.2"
+  }
+}
