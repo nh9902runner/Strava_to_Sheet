@@ -25,9 +25,9 @@ function doPost(e) {
       sheet = spreadsheet.insertSheet(sheetName);
     }
     
-    var dateString = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "dd/MM/yyyy");
+    var dateString = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "dd/MM/yyyy HH:mm");
     
-    // Nhận diện loại hành động (Mặc định nếu gửi danh sách mảng thẳng là sync_weekly)
+    // Nhận diện loại hành động
     var action = "sync_weekly";
     var runnerData = [];
     
@@ -41,7 +41,6 @@ function doPost(e) {
         action = "sync_weekly";
         runnerData = data.data || [];
       } else {
-        // Dự phòng cho phiên bản cũ
         runnerData = data.data || [];
       }
     }
@@ -59,14 +58,13 @@ function doPost(e) {
       rows.push([
         dateString,
         runner.name,
-        runner.distance // Quãng đường chạy (km)
+        runner.distance
       ]);
     }
     
     if (action === "sync_daily") {
       // ── CHẾ ĐỘ HÀNG NGÀY: GHI ĐÈ cột D, E, F ──
       
-      // Khởi tạo header D1:F1 nếu trống
       var headerD1 = sheet.getRange("D1").getValue();
       if (!headerD1) {
         sheet.getRange(1, 4, 1, 3).setValues([["Ngày cập nhật", "Tên Runner", "Số km (Tuần này)"]]);
@@ -76,17 +74,18 @@ function doPost(e) {
         headerRangeD.setHorizontalAlignment("center");
       }
       
-      // Xóa sạch dữ liệu cũ cột D, E, F từ dòng 2 trở đi
-      var lastRow = sheet.getLastRow();
-      if (lastRow >= 2) {
-        sheet.getRange(2, 4, lastRow - 1, 3).clearContent();
+      var lastRowD = sheet.getLastRow();
+      if (lastRowD >= 2) {
+        sheet.getRange(2, 4, lastRowD - 1, 3).clearContent();
       }
       
-      // Ghi đè dữ liệu mới vào cột D, E, F
       sheet.getRange(2, 4, rows.length, 3).setValues(rows);
-      
-      // Định dạng số km (cột F) thành 1 chữ số thập phân
       sheet.getRange(2, 6, rows.length, 1).setNumberFormat("#,##0.0");
+
+      // Refresh filter ngay sau khi ghi dữ liệu (không phụ thuộc trigger onChange)
+      SpreadsheetApp.flush();
+      var weekSheet = spreadsheet.getSheetByName("tuần này");
+      if (weekSheet) applyNonEmptyFilter(weekSheet);
       
       return ContentService.createTextOutput(JSON.stringify({
         status: "success",
@@ -94,9 +93,8 @@ function doPost(e) {
       })).setMimeType(ContentService.MimeType.JSON);
       
     } else {
-      // ── CHẾ ĐỘ HÀNG TUẦN (hoặc mặc định): GHI NỐI TIẾP cột A, B, C ──
+      // ── CHẾ ĐỘ HÀNG TUẦN: GHI ĐÈ cột A, B, C ──
       
-      // Khởi tạo header A1:C1 nếu trống
       var headerA1 = sheet.getRange("A1").getValue();
       if (!headerA1) {
         sheet.getRange(1, 1, 1, 3).setValues([["Ngày cập nhật", "Tên Runner", "Số km (Tuần trước)"]]);
@@ -106,26 +104,22 @@ function doPost(e) {
         headerRangeA.setHorizontalAlignment("center");
       }
       
-      // Tìm hàng cuối cùng có dữ liệu thực tế tại cột A để tránh ghi đè hoặc bỏ trống hàng do cột D, E, F dài hơn
-      var colAValues = sheet.getRange("A1:A").getValues();
-      var lastRowABC = 0;
-      for (var i = colAValues.length - 1; i >= 0; i--) {
-        if (colAValues[i][0] !== "") {
-          lastRowABC = i + 1;
-          break;
-        }
+      var lastRowW = sheet.getLastRow();
+      if (lastRowW >= 2) {
+        sheet.getRange(2, 1, lastRowW - 1, 3).clearContent();
       }
-      if (lastRowABC === 0) lastRowABC = 1;
       
-      // Ghi nối tiếp vào cột A, B, C
-      sheet.getRange(lastRowABC + 1, 1, rows.length, 3).setValues(rows);
-      
-      // Định dạng số km (cột C) thành 1 chữ số thập phân
-      sheet.getRange(2, 3, sheet.getLastRow() - 1, 1).setNumberFormat("#,##0.0");
+      sheet.getRange(2, 1, rows.length, 3).setValues(rows);
+      sheet.getRange(2, 3, rows.length, 1).setNumberFormat("#,##0.0");
+
+      // Refresh filter ngay sau khi ghi dữ liệu (không phụ thuộc trigger onChange)
+      SpreadsheetApp.flush();
+      var prevSheet = spreadsheet.getSheetByName("tuần trước");
+      if (prevSheet) applyNonEmptyFilter(prevSheet);
       
       return ContentService.createTextOutput(JSON.stringify({
         status: "success",
-        message: "Đã cập nhật hàng tuần thành công " + rows.length + " dòng nối tiếp vào cột A, B, C."
+        message: "Đã cập nhật hàng tuần thành công " + rows.length + " dòng vào cột A, B, C."
       })).setMimeType(ContentService.MimeType.JSON);
     }
     
@@ -170,6 +164,7 @@ function archiveAndSendEmails() {
   var numRows = lastRow - DATA_START_ROW + 1;
   // Đọc cột D(4), E(5), F(6), G(7) => index 0=Tên, 1=ĐăngKý, 2=ThựcTế, 3=GhiChú
   var rawData = currentSheet.getRange(DATA_START_ROW, 4, numRows, 4).getValues();
+  var displayNotes = currentSheet.getRange(DATA_START_ROW, 7, numRows, 1).getDisplayValues();
   // ── 3. TÍNH KHOẢNG THỜI GIAN TUẦN TRƯỚC ──
   var today = new Date();
   var dow = today.getDay(); // 0=CN, 1=T2...
@@ -368,7 +363,7 @@ function archiveAndSendEmails() {
     var runnerName = rawData[i][0] ? rawData[i][0].toString().trim() : "";
     var regKm  = Number(rawData[i][1]) || 0;
     var actKm  = Number(rawData[i][2]) || 0;
-    var note   = rawData[i][3] ? rawData[i][3].toString().trim() : "";
+    var note   = displayNotes[i][0] ? displayNotes[i][0].toString().trim() : "";
     // Chỉ gửi mail cho người có km thực tế > 0
     if (actKm <= 0) continue;
     var email = runnerName ? (emailMap[runnerName.toLowerCase()] || "") : "";
@@ -388,7 +383,7 @@ function archiveAndSendEmails() {
       var footer = footers[rf];
       // Format ghi chú
       var noteDisplay = "";
-      if (note) {
+      if (note && !/^0\s*(đ|d|vnd|vnđ)?$/i.test(note)) {
         var ln = note.toLowerCase();
         var hasUnit = ln.endsWith("đ") || ln.endsWith("d") || ln.endsWith("k") || ln.endsWith("đồng") || ln.endsWith("dong");
         noteDisplay = "Nuôi heo " + note + (hasUnit ? "" : "đ");
@@ -484,90 +479,140 @@ function updateWeekHeader() {
 }
 // ---------------------- Refresh Filters for "tuần trước" & "tuần này" ----------------------
 /**
- * Làm mới (refresh) filter cho cả 2 sheet, giữ nguyên các tiêu chí lọc đã đặt.
- * Cơ chế: lưu lại criteria → xóa filter cũ → tạo filter mới → áp dụng lại criteria.
+ * Áp dụng filter "không trống" cố định cho cột F (F3:F50) của sheet chỉ định.
+ * Không cần lưu/restore criteria vì điều kiện luôn cố định: ẩn ô trống.
  */
-function refreshFilter() {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var targetSheets = ['tuần trước', 'tuần này'];
-  for (var s = 0; s < targetSheets.length; s++) {
-    var sheet = ss.getSheetByName(targetSheets[s]);
-    if (!sheet) continue;
-    var existingFilter = sheet.getFilter();
-    if (!existingFilter) {
-      // Chưa có filter → tạo mới (bắt đầu từ hàng 3 – hàng header)
-      var lastRow = sheet.getLastRow();
-      var lastCol = sheet.getLastColumn();
-      if (lastRow >= 3 && lastCol > 0) {
-        sheet.getRange(3, 1, lastRow - 2, lastCol).createFilter();
-      }
-      continue;
-    }
-    // ── Lưu lại thông tin filter hiện tại ──
-    var filterRange = existingFilter.getRange();
-    var startRow = filterRange.getRow();
-    var startCol = filterRange.getColumn();
-    var numCols  = filterRange.getNumColumns();
-    // Lưu criteria từng cột (ví dụ: bạn đã chọn lọc theo giá trị ở cột F)
-    var savedCriteria = {};
-    for (var col = startCol; col < startCol + numCols; col++) {
-      var criteria = existingFilter.getColumnFilterCriteria(col);
-      if (criteria) {
-        savedCriteria[col] = criteria.copy().build();
-      }
-    }
-    // ── Xóa filter cũ ──
-    existingFilter.remove();
-    // ── Tạo filter mới (mở rộng đến hàng cuối cùng hiện tại) ──
-    var currentLastRow = Math.max(sheet.getLastRow(), startRow + 1);
-    var newFilter = sheet.getRange(startRow, startCol, currentLastRow - startRow + 1, numCols).createFilter();
-    // ── Áp dụng lại criteria đã lưu ──
-    for (var colStr in savedCriteria) {
-      try {
-        newFilter.setColumnFilterCriteria(parseInt(colStr), savedCriteria[colStr]);
-      } catch (err) {
-        Logger.log('Không thể khôi phục criteria cột ' + colStr + ': ' + err);
-      }
-    }
+function applyNonEmptyFilter(sheet) {
+  if (!sheet) return;
+
+  // Không xóa filter cũ — chỉ tạo mới nếu chưa có, sau đó cập nhật criteria
+  // Tránh race condition khi file đang được mở bởi người dùng khác
+  var filter = sheet.getFilter();
+  if (!filter) {
+    sheet.getRange(3, 6, 48, 1).createFilter();
+    filter = sheet.getFilter();
   }
-  Logger.log('✅ Filter đã được refresh (giữ nguyên criteria) cho "tuần trước" và "tuần này".');
+
+  filter.setColumnFilterCriteria(
+    6,
+    SpreadsheetApp.newFilterCriteria().whenCellNotEmpty().build()
+  );
+  Logger.log('✅ Filter F3:F50 cập nhật cho sheet "' + sheet.getName() + '"');
 }
+
 /**
- * Trigger onChange – gọi refreshFilter() khi có thay đổi dữ liệu.
- * Bao gồm thay đổi trên sheet Strava (ảnh hưởng VLOOKUP ở các sheet đích).
+ * Backup trigger: tự động refresh cả 2 filter mỗi 5 phút.
+ * Đảm bảo filter luôn đúng dù trigger onChange có bị bỏ lỡ.
  */
-function onChange(e) {
-  var relevant = [
-    'INSERT_ROW', 'INSERT_COLUMN',
-    'REMOVE_ROW', 'REMOVE_COLUMN',
-    'EDIT'
-  ];
-  if (relevant.indexOf(e.changeType) > -1) {
-    var sheetName = e.source.getActiveSheet().getName();
-    // Refresh khi thay đổi trên sheet đích hoặc sheet Strava (ảnh hưởng VLOOKUP)
-    if (sheetName === 'tuần trước' || sheetName === 'tuần này' || sheetName === 'Strava') {
-      refreshFilter();
-    }
-  }
+function autoRefreshFilters() {
+  refreshFilterTuanNay();
+  refreshFilterTuanTruoc();
 }
+
 /**
- * Gọi hàm này một lần để tạo trigger onChange.
- * Sau khi chạy, trigger sẽ tự động cập nhật filter khi dữ liệu thay đổi.
+ * Chạy 1 lần để đăng ký trigger autoRefreshFilters mỗi 5 phút.
  */
-function setupRefreshTrigger() {
-  // Xóa trigger cũ nếu đã tồn tại
+function setupAutoRefreshTrigger() {
   var triggers = ScriptApp.getProjectTriggers();
   for (var i = 0; i < triggers.length; i++) {
-    if (triggers[i].getHandlerFunction() === 'onChange') {
+    if (triggers[i].getHandlerFunction() === 'autoRefreshFilters') {
       ScriptApp.deleteTrigger(triggers[i]);
     }
   }
-  // Tạo trigger mới
-  ScriptApp.newTrigger('onChange')
+  ScriptApp.newTrigger('autoRefreshFilters')
+    .timeBased()
+    .everyMinutes(5)
+    .create();
+  Logger.log('✅ Trigger autoRefreshFilters mỗi 5 phút đã được tạo.');
+}
+
+function refreshFilterTuanNay() {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('tuần này');
+  applyNonEmptyFilter(sheet);
+}
+
+function refreshFilterTuanTruoc() {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('tuần trước');
+  applyNonEmptyFilter(sheet);
+}
+
+/**
+ * Trigger onChange riêng cho sheet "tuần này"
+ */
+function onChangeTuanNay(e) {
+  var relevant = ['INSERT_ROW', 'INSERT_COLUMN', 'REMOVE_ROW', 'REMOVE_COLUMN', 'EDIT'];
+  if (relevant.indexOf(e.changeType) === -1) return;
+  var sheetName = e.source.getActiveSheet().getName();
+  if (sheetName === 'tuần này' || sheetName === 'Strava') {
+    refreshFilterTuanNay();
+  }
+}
+
+/**
+ * Trigger onChange riêng cho sheet "tuần trước"
+ */
+function onChangeTuanTruoc(e) {
+  var relevant = ['INSERT_ROW', 'INSERT_COLUMN', 'REMOVE_ROW', 'REMOVE_COLUMN', 'EDIT'];
+  if (relevant.indexOf(e.changeType) === -1) return;
+  var sheetName = e.source.getActiveSheet().getName();
+  if (sheetName === 'tuần trước' || sheetName === 'Strava') {
+    refreshFilterTuanTruoc();
+  }
+}
+
+/**
+ * Trigger onEdit duy nhất xử lý cả 2 sheet.
+ * - Sửa trực tiếp trên "tuần này"   → refresh filter tuần này
+ * - Sửa trực tiếp trên "tuần trước" → refresh filter tuần trước
+ * - Sửa cột A,B,C trên "Strava"     → refresh filter tuần trước (dữ liệu sync_weekly)
+ * - Sửa cột D,E,F trên "Strava"     → refresh filter tuần này   (dữ liệu sync_daily)
+ */
+function onEditRefreshFilters(e) {
+  var sheetName = e.range.getSheet().getName();
+
+  if (sheetName === 'tuần này') {
+    refreshFilterTuanNay();
+    return;
+  }
+
+  if (sheetName === 'tuần trước') {
+    refreshFilterTuanTruoc();
+    return;
+  }
+
+  if (sheetName === 'Strava') {
+    var col = e.range.getColumn();
+    if (col >= 1 && col <= 3) refreshFilterTuanTruoc(); // cột A,B,C → tuần trước
+    if (col >= 4 && col <= 6) refreshFilterTuanNay();   // cột D,E,F → tuần này
+  }
+}
+
+/**
+ * Chạy 1 lần để xóa trigger cũ và tạo 3 trigger mới riêng biệt.
+ * (2 onChange cho INSERT/REMOVE row/col + 1 onEdit thông minh theo cột)
+ */
+function setupRefreshTriggers() {
+  var triggers = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < triggers.length; i++) {
+    var fn = triggers[i].getHandlerFunction();
+    if (fn === 'onChange' || fn === 'onChangeTuanNay' || fn === 'onChangeTuanTruoc' ||
+        fn === 'onEditTuanNay' || fn === 'onEditTuanTruoc' || fn === 'onEditRefreshFilters') {
+      ScriptApp.deleteTrigger(triggers[i]);
+    }
+  }
+  ScriptApp.newTrigger('onChangeTuanNay')
     .forSpreadsheet(SpreadsheetApp.getActive())
     .onChange()
     .create();
-  Logger.log('Trigger onChange đã được thiết lập.');
+  ScriptApp.newTrigger('onChangeTuanTruoc')
+    .forSpreadsheet(SpreadsheetApp.getActive())
+    .onChange()
+    .create();
+  ScriptApp.newTrigger('onEditRefreshFilters')
+    .forSpreadsheet(SpreadsheetApp.getActive())
+    .onEdit()
+    .create();
+  Logger.log('✅ Đã tạo 3 trigger: 2 onChange + 1 onEdit thông minh theo cột.');
 }
 /**
  * Cập nhật tiêu đề tuần ở ô E2 (merged E2:G2) trên sheet "tuần này"
@@ -612,4 +657,133 @@ function setupWeeklyUpdateTrigger() {
     .atHour(7)
     .create();
   Logger.log("Trigger cho cập nhật tiêu đề tuần đã được thiết lập mỗi thứ Hai 7h sáng.");
+}
+
+function copyTuanNayToTuanTruoc() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var srcSheet = ss.getSheetByName("tuần này");
+  var dstSheet = ss.getSheetByName("tuần trước");
+
+  if (!srcSheet) throw new Error("Không tìm thấy sheet 'tuần này'");
+  if (!dstSheet) throw new Error("Không tìm thấy sheet 'tuần trước'");
+
+  var values = srcSheet.getRange("E4:E50").getValues();
+  dstSheet.getRange("E4:E50").setValues(values);
+
+  Logger.log("✅ Đã copy E4:E50 từ 'tuần này' sang 'tuần trước' lúc " + new Date());
+}
+
+/**
+ * Cập nhật tiêu đề tuần ở ô E2 trên sheet "đăng ký"
+ * Tính tuần tiếp theo (thứ 2 đến chủ nhật)
+ * Chạy tự động vào 1h sáng thứ Hai hàng tuần.
+ */
+function updateDangKyWeekHeader() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName("đăng ký");
+  if (!sheet) throw new Error("Không tìm thấy sheet 'đăng ký'");
+
+  var today = new Date();
+  var dayOfWeek = today.getDay(); // 0=CN, 1=T2, ..., 6=T7
+
+  // Tính thứ 2 của tuần hiện tại
+  var offsetToMonday = (dayOfWeek === 0) ? -6 : 1 - dayOfWeek;
+  var monday = new Date(today);
+  monday.setDate(today.getDate() + offsetToMonday);
+
+  var sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+
+  var monStr = monday.getDate() + "/" + (monday.getMonth() + 1);
+  var sunStr = sunday.getDate() + "/" + (sunday.getMonth() + 1);
+  var weekLabel = "Tuần từ " + monStr + " đến " + sunStr;
+
+  sheet.getRange("E2").setValue(weekLabel);
+  Logger.log("✅ Đã cập nhật tiêu đề tuần trên sheet 'đăng ký': " + weekLabel);
+}
+
+/**
+ * API GET để xuất dữ liệu bảng xếp hạng sang trang Landing Page (GitHub Pages)
+ */
+function doGet(e) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  // Đọc giờ sync từ sheet "Strava": A2 = tuần trước, D2 = tuần này
+  var stravaSheet = ss.getSheetByName("Strava");
+  var lastWeekUpdated = "";
+  var thisWeekUpdated = "";
+  if (stravaSheet) {
+    var cellA2 = stravaSheet.getRange("A2").getValue();
+    var cellD2 = stravaSheet.getRange("D2").getValue();
+    if (cellA2) lastWeekUpdated = Utilities.formatDate(new Date(cellA2), Session.getScriptTimeZone(), "HH:mm dd/MM/yyyy");
+    if (cellD2) thisWeekUpdated = Utilities.formatDate(new Date(cellD2), Session.getScriptTimeZone(), "HH:mm dd/MM/yyyy");
+  }
+
+  var result = {
+    thisWeek: [],
+    thisWeekHeader: "",
+    lastWeek: [],
+    lastWeekHeader: "",
+    thisWeekUpdated: thisWeekUpdated,
+    lastWeekUpdated: lastWeekUpdated
+  };
+  
+  try {
+    // 1. Đọc dữ liệu "tuần này"
+    var sheetThisWeek = ss.getSheetByName("tuần này");
+    if (sheetThisWeek) {
+      result.thisWeek = getLeaderboardFromSheet(sheetThisWeek);
+      result.thisWeekHeader = sheetThisWeek.getRange("E2").getValue().toString().trim();
+    }
+    
+    // 2. Đọc dữ liệu "tuần trước"
+    var sheetLastWeek = ss.getSheetByName("tuần trước");
+    if (sheetLastWeek) {
+      result.lastWeek = getLeaderboardFromSheet(sheetLastWeek);
+      result.lastWeekHeader = sheetLastWeek.getRange("E2").getValue().toString().trim();
+    }
+  } catch (err) {
+    result.error = err.toString();
+  }
+  
+  return ContentService.createTextOutput(JSON.stringify(result))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * Đọc dữ liệu từ dòng 4, cột D:G (Tên, Đăng ký, Thực tế, Ghi chú) của sheet chỉ định
+ */
+function getLeaderboardFromSheet(sheet) {
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 4) return [];
+  
+  var numRows = lastRow - 4 + 1;
+  // Cột D(4), E(5), F(6), G(7) => index 0=Tên, 1=Đăng ký, 2=Thực tế, 3=Ghi chú
+  var values = sheet.getRange(4, 4, numRows, 4).getValues();
+  // Lấy giá trị hiển thị dạng chữ (text) của riêng cột G (Ghi chú) để tránh sai số hiển thị
+  var displayNotes = sheet.getRange(4, 7, numRows, 1).getDisplayValues();
+  var runners = [];
+  
+  for (var i = 0; i < values.length; i++) {
+    var name = values[i][0] ? values[i][0].toString().trim() : "";
+    if (!name) continue;
+    
+    var regKm = Number(values[i][1]) || 0;
+    var actKm = Number(values[i][2]) || 0;
+    var note = displayNotes[i][0] ? displayNotes[i][0].toString().trim() : "";
+    
+    runners.push({
+      name: name,
+      regKm: regKm,
+      actKm: actKm,
+      note: note
+    });
+  }
+  
+  // Sắp xếp theo thứ tự km thực tế giảm dần
+  runners.sort(function(a, b) {
+    return b.actKm - a.actKm;
+  });
+  
+  return runners;
 }
