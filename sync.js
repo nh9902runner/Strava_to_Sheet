@@ -33,6 +33,10 @@ async function run() {
     if (!data || !data.data || !Array.isArray(data.data)) {
       throw new Error('Định dạng dữ liệu trả về từ Strava không đúng hoặc cookie đã hết hạn. Hãy kiểm tra lại.');
     }
+    // DEBUG: In ra toàn bộ fields của item đầu tiên để xác định tên field athlete ID
+    if (data.data.length > 0) {
+      console.log('[DEBUG] Strava item fields:', JSON.stringify(data.data[0], null, 2));
+    }
     const runners = data.data.map(item => {
       const firstName = item.athlete_firstname || '';
       const lastName = item.athlete_lastname || '';
@@ -42,14 +46,14 @@ async function run() {
       const distanceMeters = item.distance || 0;
       const distanceKm = Math.floor((distanceMeters / 1000) * 10) / 10;
       return {
+        athlete_id: item.athlete_id || null,
         name: fullName,
         distance: distanceKm
       };
     });
     console.log(`Đã lấy thành công dữ liệu của ${runners.length} runner.`);
     if (runners.length === 0) {
-      console.log(`Không có hoạt động nào được ghi nhận trong ${mode === 'daily' ? 'tuần này' : 'tuần trước'}.`);
-      return;
+      console.log(`Không có hoạt động nào được ghi nhận trong ${mode === 'daily' ? 'tuần này' : 'tuần trước'}. Gửi tín hiệu xóa dữ liệu cũ lên Google Sheet...`);
     }
     console.log(`Bắt đầu gửi dữ liệu (${mode}) sang Google Sheet...`);
     
