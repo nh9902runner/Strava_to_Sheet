@@ -57,8 +57,17 @@ async function run() {
     process.exit(1);
   }
 
-  // 1. Quét thông tin thành viên để lấy map tên -> athlete_id
-  const membersMap = await getClubMembers();
+  // 1. Chỉ quét thông tin toàn bộ thành viên khi chạy weekly (hàng tuần)
+  let membersMap = {};
+  let fullMembersList = [];
+  if (!isDaily) {
+    membersMap = await getClubMembers();
+    // Chuyển membersMap thành mảng các đối tượng để gửi lên Apps Script
+    fullMembersList = Object.keys(membersMap).map(name => ({
+      athlete_id: membersMap[name],
+      name: name // Tên viết thường ban đầu
+    }));
+  }
 
   const url = `https://www.strava.com/clubs/${CLUB_ID}/leaderboard?week_offset=${weekOffset}`;
   console.log(`Bắt đầu lấy dữ liệu bảng xếp hạng từ Strava Club: ${CLUB_ID} (${mode === 'daily' ? 'Tuần này' : 'Tuần trước'})...`);
@@ -83,7 +92,7 @@ async function run() {
       const fullName = `${firstName} ${lastName}`.trim() || 'Vận động viên ẩn';
       const nameKey = fullName.toLowerCase();
 
-      // So khớp tên lấy athlete_id từ membersMap
+      // So khớp lấy athleteId nếu có sẵn trong membersMap (chỉ có khi chạy weekly)
       const athleteId = membersMap[nameKey] || null;
       
       // Distance is returned in meters, convert to km (with 1 decimal place to match Strava web)
@@ -101,10 +110,11 @@ async function run() {
     }
     console.log(`Bắt đầu gửi dữ liệu (${mode}) sang Google Sheet...`);
     
-    // Đóng gói payload có kèm action để Google Apps Script phân biệt daily / weekly
+    // Đóng gói payload có kèm action và danh sách fullMembers (nếu là weekly)
     const payload = {
       action: mode === 'daily' ? 'sync_daily' : 'sync_weekly',
-      data: runners
+      data: runners,
+      fullMembers: !isDaily ? fullMembersList : [] // Chỉ gửi khi chạy weekly
     };
     const postResponse = await axios.post(WEBAPP_URL, payload, {
       headers: {
