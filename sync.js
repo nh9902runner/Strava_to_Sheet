@@ -8,6 +8,45 @@ const WEBAPP_URL = process.env.GOOGLE_SHEET_WEBAPP_URL;
 const isDaily = process.env.SYNC_MODE === 'daily' || process.argv.includes('--daily');
 const mode = isDaily ? 'daily' : 'weekly';
 const weekOffset = isDaily ? 0 : 1; 
+async function getClubMembers() {
+  const members = {};
+  console.log(`Bắt đầu quét danh sách thành viên từ Strava Club: ${CLUB_ID}...`);
+  // Quét qua page 1 và page 2 của danh sách member
+  for (let page = 1; page <= 2; page++) {
+    const membersUrl = `https://www.strava.com/clubs/${CLUB_ID}/members?page=${page}`;
+    try {
+      const response = await axios.get(membersUrl, {
+        headers: {
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Cookie': COOKIE,
+          'Referer': `https://www.strava.com/clubs/${CLUB_ID}`
+        }
+      });
+      const html = response.data;
+      
+      // Regex trích xuất URL athlete và tên hiển thị trong thẻ HTML members
+      // HTML mẫu: <a class="name" href="/athletes/12345678">Firstname Lastname</a>
+      // Hoặc <a class="avatar athlete-avatar" href="/athletes/12345678" title="Firstname Lastname">
+      const regex = /href="\/athletes\/(\d+)"[^>]*>([^<]+)/g;
+      let match;
+      let count = 0;
+      while ((match = regex.exec(html)) !== null) {
+        const id = match[1];
+        const name = match[2].replace(/\n/g, '').trim();
+        if (name && id) {
+          members[name.toLowerCase()] = id;
+          count++;
+        }
+      }
+      console.log(`Trang ${page}: Tìm thấy ${count} thành viên.`);
+    } catch (e) {
+      console.warn(`[Cảnh báo] Không thể lấy danh sách thành viên ở trang ${page}:`, e.message);
+    }
+  }
+  return members;
+}
+
 async function run() {
   if (!COOKIE) {
     console.error('Lỗi: Thiếu biến môi trường STRAVA_COOKIE. Hãy cấu hình trong Secrets.');
@@ -17,6 +56,10 @@ async function run() {
     console.error('Lỗi: Thiếu biến môi trường GOOGLE_SHEET_WEBAPP_URL. Hãy cấu hình trong Secrets.');
     process.exit(1);
   }
+
+  // 1. Quét thông tin thành viên để lấy map tên -> athlete_id
+  const membersMap = await getClubMembers();
+
   const url = `https://www.strava.com/clubs/${CLUB_ID}/leaderboard?week_offset=${weekOffset}`;
   console.log(`Bắt đầu lấy dữ liệu bảng xếp hạng từ Strava Club: ${CLUB_ID} (${mode === 'daily' ? 'Tuần này' : 'Tuần trước'})...`);
   try {
@@ -33,20 +76,21 @@ async function run() {
     if (!data || !data.data || !Array.isArray(data.data)) {
       throw new Error('Định dạng dữ liệu trả về từ Strava không đúng hoặc cookie đã hết hạn. Hãy kiểm tra lại.');
     }
-    // DEBUG: In ra toàn bộ fields của item đầu tiên để xác định tên field athlete ID
-    if (data.data.length > 0) {
-      console.log('[DEBUG] Strava item fields:', JSON.stringify(data.data[0], null, 2));
-    }
+    
     const runners = data.data.map(item => {
       const firstName = item.athlete_firstname || '';
       const lastName = item.athlete_lastname || '';
       const fullName = `${firstName} ${lastName}`.trim() || 'Vận động viên ẩn';
+      const nameKey = fullName.toLowerCase();
+
+      // So khớp tên lấy athlete_id từ membersMap
+      const athleteId = membersMap[nameKey] || null;
       
       // Distance is returned in meters, convert to km (with 1 decimal place to match Strava web)
       const distanceMeters = item.distance || 0;
       const distanceKm = Math.floor((distanceMeters / 1000) * 10) / 10;
       return {
-        athlete_id: item.athlete_id || null,
+        athlete_id: athleteId,
         name: fullName,
         distance: distanceKm
       };
